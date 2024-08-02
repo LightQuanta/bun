@@ -137,7 +137,7 @@ void us_connecting_socket_close(int ssl, struct us_connecting_socket_t *c) {
     c->closed = 1;
 
     for (struct us_socket_t *s = c->connecting_head; s; s = s->connect_next) {
-        us_internal_socket_context_unlink_socket(s->context, s);
+        us_internal_socket_context_unlink_socket(ssl, s->context, s);
         us_poll_stop((struct us_poll_t *) s, s->context->loop);
         bsd_close_socket(us_poll_fd((struct us_poll_t *) s));
 
@@ -157,6 +157,9 @@ void us_connecting_socket_close(int ssl, struct us_connecting_socket_t *c) {
 } 
 
 struct us_socket_t *us_socket_close(int ssl, struct us_socket_t *s, int code, void *reason) {
+    if(ssl) {
+        return (struct us_socket_t *)us_internal_ssl_socket_close((struct us_internal_ssl_socket_t *) s, code, reason);
+    }
     if (!us_socket_is_closed(0, s)) {
         if (s->low_prio_state == 1) {
             /* Unlink this socket from the low-priority queue */
@@ -169,7 +172,7 @@ struct us_socket_t *us_socket_close(int ssl, struct us_socket_t *s, int code, vo
             s->next = 0;
             s->low_prio_state = 0;
         } else {
-            us_internal_socket_context_unlink_socket(s->context, s);
+            us_internal_socket_context_unlink_socket(ssl, s->context, s);
         }
         #ifdef LIBUS_USE_KQUEUE
             // kqueue automatically removes the fd from the set on close
@@ -179,6 +182,13 @@ struct us_socket_t *us_socket_close(int ssl, struct us_socket_t *s, int code, vo
             /* Disable any instance of us in the pending ready poll list */
             us_poll_stop((struct us_poll_t *) s, s->context->loop);
         #endif
+
+        if (code == LIBUS_SOCKET_CLOSE_CODE_CONNECTION_RESET) {
+            // Prevent entering TIME_WAIT state when forcefully closing
+            struct linger l = { 1, 0 };
+            setsockopt(us_poll_fd((struct us_poll_t *)s), SOL_SOCKET, SO_LINGER, (const char*)&l, sizeof(l));
+        }
+
         bsd_close_socket(us_poll_fd((struct us_poll_t *) s));
 
         /* Link this socket to the close-list and let it be deleted after this iteration */
@@ -212,7 +222,7 @@ struct us_socket_t *us_socket_detach(int ssl, struct us_socket_t *s) {
             s->next = 0;
             s->low_prio_state = 0;
         } else {
-            us_internal_socket_context_unlink_socket(s->context, s);
+            us_internal_socket_context_unlink_socket(ssl, s->context, s);
         }
         us_poll_stop((struct us_poll_t *) s, s->context->loop);
 

@@ -1,9 +1,6 @@
-import assert from "assert";
-import dedent from "dedent";
-import { ESBUILD, itBundled, testForFile } from "./expectBundled";
+import { itBundled } from "./expectBundled";
 import { Database } from "bun:sqlite";
-import { fillRepeating } from "harness";
-var { describe, test, expect } = testForFile(import.meta.path);
+import { describe } from "bun:test";
 
 describe("bundler", () => {
   itBundled("compile/HelloWorld", {
@@ -298,5 +295,21 @@ describe("bundler", () => {
       `,
     },
     run: { stdout: '{"\u{6211}":"\u{6211}"}' },
+  });
+  itBundled("compile/ImportMetaMain", {
+    compile: true,
+    files: {
+      "/entry.ts": /* js */ `
+        // test toString on function to observe what the inlined value was
+        console.log((() => import.meta.main).toString().includes('true'));
+        console.log((() => !import.meta.main).toString().includes('false'));
+        console.log((() => !!import.meta.main).toString().includes('true'));
+        console.log((() => require.main == module).toString().includes('true'));
+        console.log((() => require.main === module).toString().includes('true'));
+        console.log((() => require.main !== module).toString().includes('false'));
+        console.log((() => require.main !== module).toString().includes('false'));
+      `,
+    },
+    run: { stdout: new Array(7).fill("true").join("\n") },
   });
 });

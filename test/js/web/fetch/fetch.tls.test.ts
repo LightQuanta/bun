@@ -60,6 +60,30 @@ it("fetch with valid tls should not throw", async () => {
 });
 
 it("fetch with valid tls and non-native checkServerIdentity should work", async () => {
+  for (const isBusy of [true, false]) {
+    let count = 0;
+    const promises = [`https://example.com`, `https://www.example.com`].map(async url => {
+      await fetch(url, {
+        keepalive: false,
+        tls: {
+          checkServerIdentity(hostname: string, cert: tls.PeerCertificate) {
+            count++;
+            expect(url).toContain(hostname);
+            return tls.checkServerIdentity(hostname, cert);
+          },
+        },
+      }).then((res: Response) => res.blob());
+    });
+    if (isBusy) {
+      const start = performance.now();
+      while (performance.now() - start < 500) {}
+    }
+    await Promise.all(promises);
+    expect(count).toBe(2);
+  }
+});
+
+it("fetch with valid tls and non-native checkServerIdentity should work", async () => {
   let count = 0;
   const promises = [`https://example.com`, `https://www.example.com`].map(async url => {
     await fetch(url, {
@@ -68,12 +92,14 @@ it("fetch with valid tls and non-native checkServerIdentity should work", async 
         checkServerIdentity(hostname: string, cert: tls.PeerCertificate) {
           count++;
           expect(url).toContain(hostname);
-          return tls.checkServerIdentity(hostname, cert);
+          throw new Error("CustomError");
         },
       },
-    }).then((res: Response) => res.blob());
+    });
   });
-  await Promise.all(promises);
+  const start = performance.now();
+  while (performance.now() - start < 1000) {}
+  expect((await Promise.allSettled(promises)).every(p => p.status === "rejected")).toBe(true);
   expect(count).toBe(2);
 });
 
@@ -198,4 +224,37 @@ it("fetch should respect rejectUnauthorized env", async () => {
     expect(exitCode1).toBe(0);
     expect(exitCode2).toBe(1);
   });
+});
+
+it("fetch timeout works on tls", async () => {
+  using server = Bun.serve({
+    tls: cert1,
+    hostname: "localhost",
+    port: 0,
+    rejectUnauthorized: false,
+    async fetch() {
+      async function* body() {
+        yield "Hello, ";
+        await Bun.sleep(700); // should only take 200ms-350ms
+        yield "World!";
+      }
+      return new Response(body);
+    },
+  });
+  const start = performance.now();
+  const TIMEOUT = 200;
+  const THRESHOLD = 150;
+
+  try {
+    await fetch(server.url, {
+      signal: AbortSignal.timeout(TIMEOUT),
+      tls: { ca: cert1.cert },
+    }).then(res => res.text());
+  } catch (e) {
+    expect(e.name).toBe("TimeoutError");
+  } finally {
+    const total = performance.now() - start;
+    expect(total).toBeGreaterThanOrEqual(TIMEOUT - THRESHOLD);
+    expect(total).toBeLessThanOrEqual(TIMEOUT + THRESHOLD);
+  }
 });

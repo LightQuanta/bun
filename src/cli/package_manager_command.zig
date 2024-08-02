@@ -61,9 +61,10 @@ pub const PackageManagerCommand = struct {
         @memcpy(lockfile_buffer[0..lockfile_.len], lockfile_);
         lockfile_buffer[lockfile_.len] = 0;
         const lockfile = lockfile_buffer[0..lockfile_.len :0];
-        var pm = try PackageManager.init(ctx, PackageManager.Subcommand.pm);
+        const cli = try PackageManager.CommandLineArguments.parse(ctx.allocator, .pm);
+        var pm = try PackageManager.init(ctx, cli, PackageManager.Subcommand.pm);
 
-        const load_lockfile = pm.lockfile.loadFromDisk(ctx.allocator, ctx.log, lockfile);
+        const load_lockfile = pm.lockfile.loadFromDisk(pm, ctx.allocator, ctx.log, lockfile, true);
         handleLoadLockfileErrors(load_lockfile, pm);
 
         Output.flush();
@@ -120,8 +121,8 @@ pub const PackageManagerCommand = struct {
     pub fn exec(ctx: Command.Context) !void {
         var args = try std.process.argsAlloc(ctx.allocator);
         args = args[1..];
-
-        var pm = PackageManager.init(ctx, PackageManager.Subcommand.pm) catch |err| {
+        const cli = try PackageManager.CommandLineArguments.parse(ctx.allocator, .pm);
+        var pm = PackageManager.init(ctx, cli, PackageManager.Subcommand.pm) catch |err| {
             if (err == error.MissingPackageJSON) {
                 var cwd_buf: bun.PathBuffer = undefined;
                 if (bun.getcwd(&cwd_buf)) |cwd| {
@@ -167,7 +168,7 @@ pub const PackageManagerCommand = struct {
             Output.flush();
             return;
         } else if (strings.eqlComptime(subcommand, "hash")) {
-            const load_lockfile = pm.lockfile.loadFromDisk(ctx.allocator, ctx.log, "bun.lockb");
+            const load_lockfile = pm.lockfile.loadFromDisk(pm, ctx.allocator, ctx.log, "bun.lockb", true);
             handleLoadLockfileErrors(load_lockfile, pm);
 
             _ = try pm.lockfile.hasMetaHashChanged(false, pm.lockfile.packages.len);
@@ -178,7 +179,7 @@ pub const PackageManagerCommand = struct {
             Output.enableBuffering();
             Global.exit(0);
         } else if (strings.eqlComptime(subcommand, "hash-print")) {
-            const load_lockfile = pm.lockfile.loadFromDisk(ctx.allocator, ctx.log, "bun.lockb");
+            const load_lockfile = pm.lockfile.loadFromDisk(pm, ctx.allocator, ctx.log, "bun.lockb", true);
             handleLoadLockfileErrors(load_lockfile, pm);
 
             Output.flush();
@@ -187,7 +188,7 @@ pub const PackageManagerCommand = struct {
             Output.enableBuffering();
             Global.exit(0);
         } else if (strings.eqlComptime(subcommand, "hash-string")) {
-            const load_lockfile = pm.lockfile.loadFromDisk(ctx.allocator, ctx.log, "bun.lockb");
+            const load_lockfile = pm.lockfile.loadFromDisk(pm, ctx.allocator, ctx.log, "bun.lockb", true);
             handleLoadLockfileErrors(load_lockfile, pm);
 
             _ = try pm.lockfile.hasMetaHashChanged(true, pm.lockfile.packages.len);
@@ -260,7 +261,7 @@ pub const PackageManagerCommand = struct {
             try TrustCommand.exec(ctx, pm, args);
             Global.exit(0);
         } else if (strings.eqlComptime(subcommand, "ls")) {
-            const load_lockfile = pm.lockfile.loadFromDisk(ctx.allocator, ctx.log, "bun.lockb");
+            const load_lockfile = pm.lockfile.loadFromDisk(pm, ctx.allocator, ctx.log, "bun.lockb", true);
             handleLoadLockfileErrors(load_lockfile, pm);
 
             Output.flush();
@@ -349,6 +350,7 @@ pub const PackageManagerCommand = struct {
             }
             const load_lockfile = @import("../install/migration.zig").detectAndLoadOtherLockfile(
                 pm.lockfile,
+                pm,
                 ctx.allocator,
                 pm.log,
                 pm.options.lockfile_path,

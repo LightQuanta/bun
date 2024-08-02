@@ -12,7 +12,7 @@ const strings = bun.strings;
 const default_allocator = bun.default_allocator;
 const NewGlobalObject = JSC.NewGlobalObject;
 const JSGlobalObject = JSC.JSGlobalObject;
-const is_bindgen: bool = std.meta.globalOption("bindgen", bool) orelse false;
+const is_bindgen: bool = false;
 const ZigString = JSC.ZigString;
 const string = bun.string;
 const JSValue = JSC.JSValue;
@@ -202,11 +202,7 @@ pub const ResolvedSource = extern struct {
     /// source_url is eventually deref'd on success
     source_url: bun.String = bun.String.empty,
 
-    // this pointer is unused and shouldn't exist
-    commonjs_exports: ?[*]ZigString = null,
-
-    // This field is used to indicate whether it's a CommonJS module or ESM
-    commonjs_exports_len: u32 = 0,
+    is_commonjs_module: bool = false,
 
     hash: u32 = 0,
 
@@ -221,6 +217,13 @@ pub const ResolvedSource = extern struct {
     already_bundled: bool = false,
 
     pub const Tag = @import("ResolvedSourceTag").ResolvedSourceTag;
+};
+
+pub const SourceProvider = opaque {
+    extern fn JSC__SourceProvider__deref(*SourceProvider) void;
+    pub fn deref(provider: *SourceProvider) void {
+        JSC__SourceProvider__deref(provider);
+    }
 };
 
 const Mimalloc = @import("../../allocators/mimalloc.zig");
@@ -360,7 +363,7 @@ pub const Process = extern struct {
 
     // TODO: https://github.com/nodejs/node/blob/master/deps/uv/src/unix/darwin-proctitle.c
     pub fn setTitle(globalObject: *JSGlobalObject, _: *ZigString) callconv(.C) JSValue {
-        return ZigString.init(_bun).toValue(globalObject);
+        return ZigString.init(_bun).toJS(globalObject);
     }
 
     pub const getArgv = JSC.Node.Process.getArgv;
@@ -425,6 +428,10 @@ pub const ZigStackTrace = extern struct {
 
     frames_ptr: [*]ZigStackFrame,
     frames_len: u8,
+
+    /// Non-null if `source_lines_*` points into data owned by a JSC::SourceProvider.
+    /// If so, then .deref must be called on it to release the memory.
+    referenced_source_provider: ?*JSC.SourceProvider = null,
 
     pub fn toAPI(
         this: *const ZigStackTrace,
@@ -553,20 +560,10 @@ pub const ZigStackFrame = extern struct {
         }
 
         if (!this.source_url.isEmpty()) {
-            frame.file = try std.fmt.allocPrint(allocator, "{any}", .{this.sourceURLFormatter(root_path, origin, true, false)});
+            frame.file = try std.fmt.allocPrint(allocator, "{}", .{this.sourceURLFormatter(root_path, origin, true, false)});
         }
 
-        frame.position.source_offset = this.position.source_offset;
-
-        // For remapped code, we add 1 to the line number
-        frame.position.line = this.position.line + @as(i32, @intFromBool(this.remapped));
-
-        frame.position.line_start = this.position.line_start;
-        frame.position.line_stop = this.position.line_stop;
-        frame.position.column_start = this.position.column_start;
-        frame.position.column_stop = this.position.column_stop;
-        frame.position.expression_start = this.position.expression_start;
-        frame.position.expression_stop = this.position.expression_stop;
+        frame.position = this.position;
         frame.scope = @as(Api.StackFrameScope, @enumFromInt(@intFromEnum(this.code_type)));
 
         return frame;
@@ -580,6 +577,7 @@ pub const ZigStackFrame = extern struct {
         exclude_line_column: bool = false,
         remapped: bool = false,
         root_path: string = "",
+
         pub fn format(this: SourceURLFormatter, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
             if (this.enable_color) {
                 try writer.writeAll(Output.prettyFmt("<r><cyan>", true));
@@ -605,9 +603,16 @@ pub const ZigStackFrame = extern struct {
             }
 
             try writer.writeAll(source_slice);
+            if (source_slice.len > 0 and (this.position.line.isValid() or this.position.column.isValid())) {
+                if (this.enable_color) {
+                    try writer.writeAll(comptime Output.prettyFmt("<r><d>:", true));
+                } else {
+                    try writer.writeAll(":");
+                }
+            }
 
             if (this.enable_color) {
-                if (this.position.line > -1) {
+                if (this.position.line.isValid() or this.position.column.isValid()) {
                     try writer.writeAll(comptime Output.prettyFmt("<r>", true));
                 } else {
                     try writer.writeAll(comptime Output.prettyFmt("<r>", true));
@@ -615,29 +620,31 @@ pub const ZigStackFrame = extern struct {
             }
 
             if (!this.exclude_line_column) {
-                if (this.position.line > -1 and this.position.column_start > -1) {
+                if (this.position.line.isValid() and this.position.column.isValid()) {
                     if (this.enable_color) {
                         try std.fmt.format(
                             writer,
-                            // :
-                            comptime Output.prettyFmt("<d>:<r><yellow>{d}<r><d>:<yellow>{d}<r>", true),
-                            .{ this.position.line + 1, this.position.column_start + 1 },
+                            comptime Output.prettyFmt("<yellow>{d}<r><d>:<yellow>{d}<r>", true),
+                            .{ this.position.line.oneBased(), this.position.column.oneBased() },
                         );
                     } else {
-                        try std.fmt.format(writer, ":{d}:{d}", .{ this.position.line + 1, this.position.column_start + 1 });
+                        try std.fmt.format(writer, "{d}:{d}", .{
+                            this.position.line.oneBased(),
+                            this.position.column.oneBased(),
+                        });
                     }
-                } else if (this.position.line > -1) {
+                } else if (this.position.line.isValid()) {
                     if (this.enable_color) {
                         try std.fmt.format(
                             writer,
-                            comptime Output.prettyFmt("<d>:<r><yellow>{d}<r>", true),
+                            comptime Output.prettyFmt("<yellow>{d}<r>", true),
                             .{
-                                this.position.line + 1,
+                                this.position.line.oneBased(),
                             },
                         );
                     } else {
-                        try std.fmt.format(writer, ":{d}", .{
-                            this.position.line + 1,
+                        try std.fmt.format(writer, "{d}", .{
+                            this.position.line.oneBased(),
                         });
                     }
                 }
@@ -677,7 +684,11 @@ pub const ZigStackFrame = extern struct {
                     }
                 },
                 .Wasm => {
-                    try std.fmt.format(writer, "WASM {}", .{name});
+                    if (!name.isEmpty()) {
+                        try std.fmt.format(writer, "{}", .{name});
+                    } else {
+                        try writer.writeAll("WASM");
+                    }
                 },
                 .Constructor => {
                     try std.fmt.format(writer, "new {}", .{name});
@@ -716,27 +727,31 @@ pub const ZigStackFrame = extern struct {
 };
 
 pub const ZigStackFramePosition = extern struct {
-    source_offset: i32,
-    line: i32,
-    line_start: i32,
-    line_stop: i32,
-    column_start: i32,
-    column_stop: i32,
-    expression_start: i32,
-    expression_stop: i32,
+    line: bun.Ordinal,
+    column: bun.Ordinal,
+    /// -1 if not present
+    line_start_byte: c_int,
 
     pub const Invalid = ZigStackFramePosition{
-        .source_offset = -1,
-        .line = -1,
-        .line_start = -1,
-        .line_stop = -1,
-        .column_start = -1,
-        .column_stop = -1,
-        .expression_start = -1,
-        .expression_stop = -1,
+        .line = .invalid,
+        .column = .invalid,
+        .line_start_byte = -1,
     };
+
     pub fn isInvalid(this: *const ZigStackFramePosition) bool {
         return std.mem.eql(u8, std.mem.asBytes(this), std.mem.asBytes(&Invalid));
+    }
+
+    pub fn decode(reader: anytype) !@This() {
+        return .{
+            .line = bun.Ordinal.fromZeroBased(try reader.readValue(i32)),
+            .column = bun.Ordinal.fromZeroBased(try reader.readValue(i32)),
+        };
+    }
+
+    pub fn encode(this: *const @This(), writer: anytype) anyerror!void {
+        try writer.writeInt(this.line.zeroBased());
+        try writer.writeInt(this.column.zeroBased());
     }
 };
 
@@ -777,6 +792,10 @@ pub const ZigException = extern struct {
 
         for (this.stack.frames_ptr[0..this.stack.frames_len]) |*frame| {
             frame.deinit();
+        }
+
+        if (this.stack.referenced_source_provider) |source| {
+            source.deref();
         }
     }
 
@@ -820,7 +839,9 @@ pub const ZigException = extern struct {
         }
 
         pub fn deinit(this: *Holder, vm: *JSC.VirtualMachine) void {
-            this.zigException().deinit();
+            if (this.loaded) {
+                this.zig_exception.deinit();
+            }
             if (this.need_to_clear_parser_arena_on_deinit) {
                 vm.module_loader.resetArena(vm);
             }
@@ -935,7 +956,6 @@ comptime {
 
         _ = Process.getTitle;
         _ = Process.setTitle;
-        Bun.Timer.shim.ref();
         NodePath.shim.ref();
         JSArrayBufferSink.shim.ref();
         JSHTTPResponseSink.shim.ref();
@@ -958,6 +978,10 @@ comptime {
 /// Using characters16() does not seem to always have the sentinel. or something else
 /// broke when I just used it. Not sure. ... but this works!
 pub export fn Bun__LoadLibraryBunString(str: *bun.String) ?*anyopaque {
+    if (comptime !Environment.isWindows) {
+        unreachable;
+    }
+
     var buf: bun.WPathBuffer = undefined;
     const data = switch (str.encoding()) {
         .utf8 => bun.strings.convertUTF8toUTF16InBuffer(&buf, str.utf8()),

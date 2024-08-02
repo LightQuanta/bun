@@ -1,4 +1,6 @@
 #pragma once
+#include "wtf/Compiler.h"
+#include "wtf/text/OrdinalNumber.h"
 #ifndef HEADERS_HANDWRITTEN
 #define HEADERS_HANDWRITTEN
 typedef uint16_t ZigErrorCode;
@@ -92,8 +94,7 @@ typedef struct ResolvedSource {
     BunString specifier;
     BunString source_code;
     BunString source_url;
-    ZigString* commonJSExports;
-    uint32_t commonJSExportsLen;
+    bool isCommonJSModule;
     uint32_t hash;
     void* allocator;
     JSC::EncodedJSValue jsvalue_for_export;
@@ -137,15 +138,22 @@ const ZigStackFrameCode ZigStackFrameCodeGlobal = 4;
 const ZigStackFrameCode ZigStackFrameCodeWasm = 5;
 const ZigStackFrameCode ZigStackFrameCodeConstructor = 6;
 
+extern "C" void __attribute((__noreturn__)) Bun__panic(const char* message, size_t length);
+#define BUN_PANIC(message) Bun__panic(message, sizeof(message) - 1)
+
 typedef struct ZigStackFramePosition {
-    int32_t source_offset;
-    int32_t line;
-    int32_t line_start;
-    int32_t line_stop;
-    int32_t column_start;
-    int32_t column_stop;
-    int32_t expression_start;
-    int32_t expression_stop;
+    int32_t line_zero_based;
+    int32_t column_zero_based;
+    int32_t byte_position;
+
+    ALWAYS_INLINE WTF::OrdinalNumber column()
+    {
+        return OrdinalNumber::fromZeroBasedInt(this->column_zero_based);
+    }
+    ALWAYS_INLINE WTF::OrdinalNumber line()
+    {
+        return OrdinalNumber::fromZeroBasedInt(this->line_zero_based);
+    }
 } ZigStackFramePosition;
 
 typedef struct ZigStackFrame {
@@ -158,11 +166,12 @@ typedef struct ZigStackFrame {
 
 typedef struct ZigStackTrace {
     BunString* source_lines_ptr;
-    int32_t* source_lines_numbers;
+    OrdinalNumber* source_lines_numbers;
     uint8_t source_lines_len;
     uint8_t source_lines_to_collect;
     ZigStackFrame* frames_ptr;
     uint8_t frames_len;
+    JSC::SourceProvider* referenced_source_provider;
 } ZigStackTrace;
 
 typedef struct ZigException {
@@ -325,9 +334,6 @@ extern "C" JSC::JSInternalPromise* Bun__transpileFile(
     const BunString* typeAttribute,
     ErrorableResolvedSource* result, bool allowPromise);
 
-extern "C" JSC::EncodedJSValue CallbackJob__onResolve(JSC::JSGlobalObject*, JSC::CallFrame*);
-extern "C" JSC::EncodedJSValue CallbackJob__onReject(JSC::JSGlobalObject*, JSC::CallFrame*);
-
 extern "C" bool Bun__fetchBuiltinModule(
     void* bunVM,
     JSC::JSGlobalObject* global,
@@ -345,11 +351,14 @@ extern "C" const char* Bun__versions_mimalloc;
 extern "C" const char* Bun__versions_picohttpparser;
 extern "C" const char* Bun__versions_uws;
 extern "C" const char* Bun__versions_webkit;
+extern "C" const char* Bun__versions_libdeflate;
 extern "C" const char* Bun__versions_zig;
 extern "C" const char* Bun__versions_zlib;
 extern "C" const char* Bun__versions_tinycc;
 extern "C" const char* Bun__versions_lolhtml;
 extern "C" const char* Bun__versions_c_ares;
+extern "C" const char* Bun__versions_lshpack;
+extern "C" const char* Bun__versions_zstd;
 extern "C" const char* Bun__versions_usockets;
 
 extern "C" const char* Bun__version_sha;

@@ -27,6 +27,7 @@ struct us_internal_loop_data_t {
     int last_write_failed;
     struct us_socket_context_t *head;
     struct us_socket_context_t *iterator;
+    struct us_socket_context_t *closed_context_head;
     char *recv_buf;
     char *send_buf;
     void *ssl_data;
@@ -42,7 +43,7 @@ struct us_internal_loop_data_t {
     void *parent_ptr;
     char parent_tag;
     /* We do not care if this flips or not, it doesn't matter */
-    long long iteration_nr;
+    size_t iteration_nr;
 };
 
 #endif // LOOP_DATA_H

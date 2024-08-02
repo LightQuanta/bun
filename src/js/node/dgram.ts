@@ -34,6 +34,7 @@ const kStateSymbol = Symbol("state symbol");
 const async_id_symbol = Symbol("async_id_symbol");
 
 const { hideFromStack, throwNotImplemented } = require("internal/shared");
+const { ERR_SOCKET_BAD_TYPE } = require("internal/errors");
 
 const {
   FunctionPrototypeBind,
@@ -247,6 +248,7 @@ function Socket(type, listener) {
     ipv6Only: options && options.ipv6Only,
     recvBufferSize,
     sendBufferSize,
+    unrefOnBind: false,
   };
 
   if (options?.signal !== undefined) {
@@ -399,6 +401,10 @@ Socket.prototype.bind = function (port_, address_ /* , callback */) {
       },
     }).$then(
       socket => {
+        if (state.unrefOnBind) {
+          socket.unref();
+          state.unrefOnBind = false;
+        }
         state.handle.socket = socket;
         state.receiving = true;
         state.bindState = BIND_STATE_BOUND;
@@ -764,15 +770,16 @@ Socket.prototype[SymbolAsyncDispose] = async function () {
   if (!this[kStateSymbol].handle.socket) {
     return;
   }
-  return new Promise((resolve, reject) => {
-    this.close(err => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve();
-      }
-    });
+  const { promise, resolve, reject } = $newPromiseCapability(Promise);
+  this.close(err => {
+    if (err) {
+      reject(err);
+    } else {
+      resolve();
+    }
   });
+
+  return promise;
 };
 
 function socketCloseNT(self) {
@@ -933,7 +940,11 @@ Socket.prototype.ref = function () {
 Socket.prototype.unref = function () {
   const socket = this[kStateSymbol].handle?.socket;
 
-  if (socket) socket.unref();
+  if (socket) {
+    socket.unref();
+  } else {
+    this[kStateSymbol].unrefOnBind = true;
+  }
 
   return this;
 };

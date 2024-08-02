@@ -183,7 +183,7 @@ const currentFile = import.meta.url;
 Bun.openInEditor(currentFile);
 ```
 
-You can override this via the `debug.editor` setting in your [`bunfig.toml`](/docs/runtime/bunfig)
+You can override this via the `debug.editor` setting in your [`bunfig.toml`](/docs/runtime/bunfig).
 
 ```toml-diff#bunfig.toml
 + [debug]
@@ -199,8 +199,6 @@ Bun.openInEditor(import.meta.url, {
   column: 5,
 });
 ```
-
-Bun.ArrayBufferSink;
 
 ## `Bun.deepEquals()`
 

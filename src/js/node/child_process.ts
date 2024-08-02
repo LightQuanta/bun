@@ -2,12 +2,13 @@
 const EventEmitter = require("node:events");
 const StreamModule = require("node:stream");
 const OsModule = require("node:os");
+const { ERR_INVALID_ARG_TYPE, ERR_IPC_DISCONNECTED } = require("internal/errors");
+const { kHandle } = require("internal/shared");
 
 var NetModule;
 
 var ObjectCreate = Object.create;
 var ObjectAssign = Object.assign;
-var ObjectDefineProperty = Object.defineProperty;
 var BufferConcat = Buffer.concat;
 var BufferIsEncoding = Buffer.isEncoding;
 
@@ -21,7 +22,6 @@ var ArrayPrototypeIncludes = Array.prototype.includes;
 var ArrayPrototypeSlice = Array.prototype.slice;
 var ArrayPrototypeUnshift = Array.prototype.unshift;
 
-// var ArrayBuffer = ArrayBuffer;
 var ArrayBufferIsView = ArrayBuffer.isView;
 
 var NumberIsInteger = Number.isInteger;
@@ -104,17 +104,6 @@ var ReadableFromWeb;
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-function spawnTimeoutFunction(child, timeoutHolder) {
-  var timeoutId = timeoutHolder.timeoutId;
-  if (timeoutId > -1) {
-    try {
-      child.kill(killSignal);
-    } catch (err) {
-      child.emit("error", err);
-    }
-    timeoutHolder.timeoutId = -1;
-  }
-}
 /**
  * Spawns a new process using the given `file`.
  * @param {string} file
@@ -316,15 +305,19 @@ function execFile(file, args, options, callback) {
   function errorHandler(e) {
     ex = e;
 
-    if (child.stdout) child.stdout.destroy();
-    if (child.stderr) child.stderr.destroy();
+    const { stdout, stderr } = child;
+
+    if (stdout) stdout.destroy();
+    if (stderr) stderr.destroy();
 
     exitHandler();
   }
 
   function kill() {
-    if (child.stdout) child.stdout.destroy();
-    if (child.stderr) child.stderr.destroy();
+    const { stdout, stderr } = child;
+
+    if (stdout) stdout.destroy();
+    if (stderr) stderr.destroy();
 
     killed = true;
     try {
@@ -337,8 +330,8 @@ function execFile(file, args, options, callback) {
 
   if (options.timeout > 0) {
     timeoutId = setTimeout(function delayedKill() {
-      timeoutId && kill();
       timeoutId = null;
+      kill();
     }, options.timeout).unref();
   }
 
@@ -1001,20 +994,13 @@ class ChildProcess extends EventEmitter {
   spawnargs;
   pid;
   channel;
+  killed = false;
 
   [Symbol.dispose]() {
     if (!this.killed) {
       this.kill();
     }
   }
-
-  get killed() {
-    if (this.#handle == null) return false;
-  }
-
-  // constructor(options) {
-  //   super(options);
-  // }
 
   #handleOnExit(exitCode, signalCode, err) {
     if (signalCode) {
@@ -1098,8 +1084,15 @@ class ChildProcess extends EventEmitter {
     switch (i) {
       case 0: {
         switch (io) {
-          case "pipe":
-            return new NativeWritable(this.#handle.stdin);
+          case "pipe": {
+            const stdin = this.#handle.stdin;
+
+            if (!stdin)
+              // This can happen if the process was already killed.
+              return new ShimmedStdin();
+
+            return new NativeWritable(stdin);
+          }
           case "inherit":
             return process.stdin || null;
           case "destroyed":
@@ -1112,7 +1105,13 @@ class ChildProcess extends EventEmitter {
       case 1: {
         switch (io) {
           case "pipe": {
-            const pipe = ReadableFromWeb(this.#handle[fdToStdioName(i)], { encoding });
+            const value = this.#handle[fdToStdioName(i)];
+
+            if (!value)
+              // This can happen if the process was already killed.
+              return new ShimmedStdioOutStream();
+
+            const pipe = ReadableFromWeb(value, { encoding });
             this.#closesNeeded++;
             pipe.once("close", () => this.#maybeClose());
             if (autoResume) pipe.resume();
@@ -1326,15 +1325,23 @@ class ChildProcess extends EventEmitter {
   kill(sig?) {
     const signal = sig === 0 ? sig : convertToValidSignal(sig === undefined ? "SIGTERM" : sig);
 
-    if (this.#handle) {
-      this.#handle.kill(signal);
+    const handle = this.#handle;
+    if (handle) {
+      if (handle.killed) {
+        this.killed = true;
+        return true;
+      }
+
+      try {
+        handle.kill(signal);
+        this.killed = true;
+        return true;
+      } catch (e) {
+        this.emit("error", e);
+      }
     }
 
-    // TODO: Figure out how to make this conform to the Node spec...
-    // The problem is that the handle does not report killed until the process exits
-    // So we can't return whether or not the process was killed because Bun.spawn seems to handle this async instead of sync like Node does
-    // return this.#handle?.killed ?? true;
-    return true;
+    return false;
   }
 
   #maybeClose() {
@@ -1922,12 +1929,6 @@ function ERR_CHILD_PROCESS_STDIO_MAXBUFFER(stdio) {
 function ERR_UNKNOWN_SIGNAL(name) {
   const err = new TypeError(`Unknown signal: ${name}`);
   err.code = "ERR_UNKNOWN_SIGNAL";
-  return err;
-}
-
-function ERR_INVALID_ARG_TYPE(name, type, value) {
-  const err = new TypeError(`The "${name}" argument must be of type ${type}. Received ${value?.toString()}`);
-  err.code = "ERR_INVALID_ARG_TYPE";
   return err;
 }
 

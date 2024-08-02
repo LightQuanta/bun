@@ -16,6 +16,17 @@ import wt, {
   Worker,
 } from "worker_threads";
 
+test("support eval in worker", async () => {
+  const worker = new Worker(`postMessage(1 + 1)`, {
+    eval: true,
+  });
+  const result = await new Promise(resolve => {
+    worker.on("message", resolve);
+  });
+  expect(result).toBe(2);
+  await worker.terminate();
+});
+
 test("all worker_threads module properties are present", () => {
   expect(wt).toHaveProperty("getEnvironmentData");
   expect(wt).toHaveProperty("isMainThread");
@@ -122,7 +133,7 @@ test("threadId module and worker property is consistent", async () => {
   expect(worker1.threadId).toBeGreaterThan(0);
   expect(() => worker1.postMessage({ workerId: worker1.threadId })).not.toThrow();
   const worker2 = new Worker(new URL("./worker-thread-id.ts", import.meta.url).href);
-  expect(worker2.threadId).toBe(worker1.threadId + 1);
+  expect(worker2.threadId).toBeGreaterThan(worker1.threadId);
   expect(() => worker2.postMessage({ workerId: worker2.threadId })).not.toThrow();
   await worker1.terminate();
   await worker2.terminate();

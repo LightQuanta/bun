@@ -504,7 +504,7 @@ describe("fetch", () => {
     });
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe("https://example.com");
-    expect(response.redirected).toBe(true);
+    expect(response.redirected).toBe(false); // not redirected
   });
 
   it('redirect: "follow"', async () => {
@@ -2028,6 +2028,7 @@ describe("fetch Response life cycle", () => {
   });
   it("should allow to get promise result after response is GC'd", async () => {
     const server = Bun.serve({
+      port: 0,
       async fetch(request: Request) {
         return new Response(
           new ReadableStream({
@@ -2043,7 +2044,8 @@ describe("fetch Response life cycle", () => {
       },
     });
     async function fetchResponse() {
-      const response = await fetch(`${server.url.origin}/non-empty`);
+      const url = new URL("non-empty", server.url);
+      const response = await fetch(url);
       return response.text();
     }
     try {

@@ -95,6 +95,10 @@ function generate(ssl) {
         fn: "end",
         length: 3,
       },
+      terminate: {
+        fn: "terminate",
+        length: 0,
+      },
 
       //   },
       listener: {
@@ -112,7 +116,7 @@ function generate(ssl) {
       },
 
       "@@dispose": {
-        fn: "shutdown",
+        fn: "end",
         length: 0,
       },
 
@@ -122,11 +126,11 @@ function generate(ssl) {
       },
 
       ref: {
-        fn: "ref",
+        fn: "jsRef",
         length: 0,
       },
       unref: {
-        fn: "unref",
+        fn: "jsUnref",
         length: 0,
       },
 
@@ -187,7 +191,7 @@ export default [
         length: 1,
       },
       "@@dispose": {
-        fn: "stop",
+        fn: "dispose",
         length: 0,
       },
 

@@ -17,6 +17,7 @@
 
 #ifndef BSD_H
 #define BSD_H
+#pragma once
 
 // top-most wrapper of bsd-like syscalls
 
@@ -25,7 +26,7 @@
 
 #include "libusockets.h"
 
-#ifdef _WIN32
+#ifdef _WIN32 
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -34,7 +35,7 @@
 #pragma comment(lib, "ws2_32.lib")
 #define SETSOCKOPT_PTR_TYPE const char *
 #define LIBUS_SOCKET_ERROR INVALID_SOCKET
-#else
+#else /* POSIX */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -134,9 +135,9 @@ int bsd_addr_get_port(struct bsd_addr_t *addr);
 // called by dispatch_ready_poll
 LIBUS_SOCKET_DESCRIPTOR bsd_accept_socket(LIBUS_SOCKET_DESCRIPTOR fd, struct bsd_addr_t *addr);
 
-int bsd_recv(LIBUS_SOCKET_DESCRIPTOR fd, void *buf, int length, int flags);
-int bsd_send(LIBUS_SOCKET_DESCRIPTOR fd, const char *buf, int length, int msg_more);
-int bsd_write2(LIBUS_SOCKET_DESCRIPTOR fd, const char *header, int header_length, const char *payload, int payload_length);
+ssize_t bsd_recv(LIBUS_SOCKET_DESCRIPTOR fd, void *buf, int length, int flags);
+ssize_t bsd_send(LIBUS_SOCKET_DESCRIPTOR fd, const char *buf, int length, int msg_more);
+ssize_t bsd_write2(LIBUS_SOCKET_DESCRIPTOR fd, const char *header, int header_length, const char *payload, int payload_length);
 int bsd_would_block();
 
 // return LIBUS_SOCKET_ERROR or the fd that represents listen socket
